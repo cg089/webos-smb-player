@@ -109,3 +109,7 @@ Die Tests liegen in `test/smb-smoke.js` (benötigt einen erreichbaren SMB-Server
 * **„Dienst nicht erreichbar"** in der App: Der Dienst konnte nicht starten. Per SSH `sh .../autostart.sh` ausführen und `server.log` ansehen. Läuft `node` dort nicht, zeigt das Log den Grund (zu altes Node?).
 * **Einrichtungsseite nicht erreichbar:** Die Adresse steht in der App (Startseite, unten). TV und PC müssen im selben Netz sein. Der Port 8765 darf nicht blockiert sein.
 * **Anmeldung schlägt fehl:** Benutzer und Passwort prüfen. Bei Windows-Domänen die Domäne eintragen oder `DOMAIN\benutzer` als Benutzername verwenden.
+
+## Lizenz
+
+MIT, siehe [LICENSE](LICENSE).
