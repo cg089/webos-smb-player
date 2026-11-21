@@ -1,0 +1,7 @@
+{
+  "name": "org.smbstream.app.service",
+  "version": "1.0.0",
+  "description": "SMB Player Service: SMB2-Zugriff und HTTP-Streaming fuer die TV-App",
+  "main": "service.js",
+  "private": true
+}

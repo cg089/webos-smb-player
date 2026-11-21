@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMB Player – Einrichtung</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>SMB Player</h1>
+  <p class="sub">Einrichtung der Netzwerkfreigaben für den Fernseher</p>
+</header>
+
+<main>
+  <section class="card" id="infoCard">
+    <h2>Status</h2>
+    <dl id="info"><dt>Lade …</dt><dd></dd></dl>
+  </section>
+
+  <section class="card">
+    <div class="row-head">
+      <h2>Freigaben</h2>
+      <button id="btnNew" class="primary">+ Freigabe hinzufügen</button>
+    </div>
+    <p id="emptyHint" class="hint" hidden>Noch keine Freigabe eingerichtet. Mit „Freigabe hinzufügen“ geht es los.</p>
+    <ul id="shareList" class="shares"></ul>
+  </section>
+
+  <section class="card" id="formCard" hidden>
+    <h2 id="formTitle">Freigabe hinzufügen</h2>
+    <form id="form" autocomplete="off">
+      <input type="hidden" id="f_id">
+      <label>Anzeigename
+        <input id="f_name" placeholder="z. B. Filme (NAS)" maxlength="80">
+      </label>
+      <div class="grid">
+        <label>Server (Name oder IP) *
+          <input id="f_host" placeholder="z. B. 192.168.1.20 oder nas" required>
+        </label>
+        <label>Port
+          <input id="f_port" type="number" min="1" max="65535" value="445">
+        </label>
+      </div>
+      <label>Freigabename *
+        <input id="f_share" placeholder="z. B. Medien" required>
+      </label>
+      <label>Startordner in der Freigabe (optional)
+        <input id="f_subpath" placeholder="z. B. Filme/Spielfilme">
+      </label>
+      <div class="grid">
+        <label>Benutzername
+          <input id="f_username" autocomplete="off" placeholder="leer = Gast">
+        </label>
+        <label>Passwort
+          <input id="f_password" type="password" autocomplete="new-password">
+        </label>
+      </div>
+      <p class="hint" id="pwHint" hidden>Ein Passwort ist gespeichert. Feld leer lassen, um es zu behalten.</p>
+      <label>Domäne / Arbeitsgruppe (optional)
+        <input id="f_domain" placeholder="meist leer">
+      </label>
+      <div id="result" class="result" hidden></div>
+      <div class="buttons">
+        <button type="button" id="btnTest">Verbindung testen</button>
+        <button type="submit" class="primary">Speichern</button>
+        <button type="button" id="btnCancel" class="ghost">Abbrechen</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Zugriffsschutz</h2>
+    <p class="hint">Optional: Passwort für diese Einrichtungsseite und das Streaming von anderen Geräten im Netzwerk. Der Fernseher selbst braucht es nicht. Benutzername im Browser-Dialog: beliebig.</p>
+    <div class="grid">
+      <label>Neues Passwort
+        <input id="a_pw" type="password" autocomplete="new-password" placeholder="leer = Schutz aus">
+      </label>
+      <div class="inline-btn"><button id="btnAdmin">Übernehmen</button></div>
+    </div>
+    <div id="adminResult" class="result" hidden></div>
+  </section>
+
+  <section class="card small">
+    <h2>Hinweise</h2>
+    <ul class="notes">
+      <li>Unterstützt wird SMB 2.x mit Benutzername/Passwort (NTLMv2). Alte SMB-1-Geräte funktionieren nicht.</li>
+      <li>Die Konfiguration liegt lokal auf dem Fernseher. Die Passwörter stehen dort im Klartext in der Konfigurationsdatei, weil die Anmeldung sie benötigt.</li>
+      <li>Ohne Zugriffsschutz kann jedes Gerät im Heimnetz diese Seite öffnen.</li>
+    </ul>
+  </section>
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

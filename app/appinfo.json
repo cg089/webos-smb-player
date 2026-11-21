@@ -1,0 +1,12 @@
+{
+  "id": "org.smbstream.app",
+  "version": "1.0.0",
+  "vendor": "SMB Player",
+  "type": "web",
+  "main": "index.html",
+  "title": "SMB Player",
+  "icon": "icon.png",
+  "largeIcon": "largeIcon.png",
+  "resolution": "1920x1080",
+  "disableBackHistoryAPI": true
+}

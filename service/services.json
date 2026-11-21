@@ -1,0 +1,9 @@
+{
+  "id": "org.smbstream.app.service",
+  "description": "SMB Player Service",
+  "services": [
+    {
+      "name": "org.smbstream.app.service"
+    }
+  ]
+}
