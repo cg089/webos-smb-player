@@ -7,6 +7,16 @@ Entwickelt für einen **LG 75UK6200PLB** (webOS 4.x, gerootet). Läuft grundsät
 
 **Fertige Datei:** `dist/org.smbstream.app_1.0.0_all.ipk`
 
+## Screenshots
+
+Aufgenommen mit einer Demo-Freigabe und Testvideos, die TV-Oberfläche im Browser in 1920×1080 (keine Fotos vom Fernseher).
+
+| Freigaben | Ordner |
+|---|---|
+| ![Freigaben am TV](docs/screenshots/tv-freigaben.png) | ![Ordnerliste am TV](docs/screenshots/tv-ordner.png) |
+| **Wiedergabe** | **Einrichtung im Browser** |
+| ![Wiedergabe am TV](docs/screenshots/tv-wiedergabe.png) | ![Weboberfläche zur Einrichtung](docs/screenshots/weboberflaeche.png) |
+
 ## Installation
 
 **Mit dem webOS Dev Manager (am einfachsten):** den Fernseher dort hinzufügen und die IPK über die Installationsfunktion einspielen. Danach ist „SMB Player" im Launcher.
