@@ -40,9 +40,11 @@ Es lassen sich beliebig viele Freigaben anlegen. Optional kann ein Startordner i
 | ⏪ / ⏩ | | −30 s / +30 s |
 | Rot | Datei bzw. „Fortsetzen“-Zeile von vorn abspielen | Von vorn starten |
 | Gelb (Startseite) | Freigaben neu laden | |
+| Grün | Gemerkte Position der markierten Datei (bzw. der „Fortsetzen“-Zeile) vergessen | |
+| Blau (Startseite/Ordner) | Gesamten Verlauf löschen, zur Sicherheit erst nach zweitem Druck | |
 | CH ▲ ▼ | 8 Zeilen springen | |
 
-* **Fortsetzen:** Die App merkt sich pro Datei, wo du aufgehört hast. Ganz oben in der Freigabenliste steht „Fortsetzen: <zuletzt gespielte Datei>“, mit OK geht es an der Stelle weiter, auch wenn die Datei tief in Unterordnern liegt. In den Ordnerlisten zeigt ein **Fortschrittsbalken**, wie weit eine Datei schon gesehen wurde. Die ersten 15 Sekunden und die letzten 30 Sekunden werden nicht gemerkt, zu Ende gesehene Dateien fangen wieder von vorn an.
+* **Fortsetzen:** Die App merkt sich pro Datei, wo du aufgehört hast. Ganz oben in der Freigabenliste steht „Fortsetzen: <zuletzt gespielte Datei>“, mit OK geht es an der Stelle weiter, auch wenn die Datei tief in Unterordnern liegt. In den Ordnerlisten zeigt ein **Fortschrittsbalken**, wie weit eine Datei schon gesehen wurde. Die ersten 15 Sekunden und die letzten 30 Sekunden werden nicht gemerkt, zu Ende gesehene Dateien fangen wieder von vorn an. **Verlauf löschen:** einzelne Einträge mit der grünen Taste, alles mit der blauen Taste (zweimal drücken) oder in der Einrichtungsseite unter „Wiedergabe“ → „Verlauf löschen“. Der Verlauf liegt nur auf dem TV in `playstate.json` (siehe unten).
 * **Automatisch fortsetzen:** In der Einrichtungsseite unter „Wiedergabe“ lässt sich einschalten, dass die App beim Start sofort an der letzten Stelle weiterspielt.
 * **Aussehen:** Receiver-Stil wie beim IPTV-Player: blaue Fläche, lila Auswahlbalken, gelbe Zusatztexte, Uhr und ein Infofenster rechts (Größe, Datum, Fortschritt).
 * Nach dem Ende einer Datei startet automatisch die **nächste Datei im Ordner** (praktisch für Serien).

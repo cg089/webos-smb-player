@@ -157,7 +157,9 @@ function handleInfo(req, res) {
     configFile: config.file,
     shareCount: config.data.shares.length,
     hasAdminPassword: config.hasAdminPassword(),
-    autoResume: config.data.autoResume
+    autoResume: config.data.autoResume,
+    playstateFile: playstate.file,
+    historyCount: playstate.count()
   });
 }
 
@@ -284,6 +286,17 @@ function handlePosition(req, res) {
     }
     if (body.clear === true) playstate.clearPosition(body.share, body.path);
     else playstate.setPosition(body.share, body.path, body.t, body.d);
+    sendJson(res, 200, { ok: true });
+  });
+}
+
+function handleHistory(req, res) {
+  if (req.method !== 'POST') return sendError(res, 405, 'Methode nicht erlaubt');
+  if (!localOrSameOrigin(req)) return sendError(res, 403, 'Fremder Ursprung nicht erlaubt');
+  readJson(req, function (err, body) {
+    if (err) return sendError(res, 400, err.message);
+    if (body.clear !== 'all') return sendError(res, 400, 'Unbekannte Aktion');
+    playstate.clearAll();
     sendJson(res, 200, { ok: true });
   });
 }
@@ -426,6 +439,7 @@ function route(req, res) {
     if (pathname === '/api/positions') return handlePositions(req, res, u.query);
     if (pathname === '/api/position') return handlePosition(req, res);
     if (pathname === '/api/settings') return handleSettings(req, res);
+    if (pathname === '/api/history') return handleHistory(req, res);
     if (parts[1] === 'api' && parts[2] === 'shares') return handleShares(req, res, [parts[1], parts[2], parts[3] && decodeURIComponent(parts[3])]);
     if (pathname === '/api/test') return handleTest(req, res);
     if (pathname === '/api/admin') return handleAdmin(req, res);

@@ -109,6 +109,13 @@ function getLast() {
   return data.last;
 }
 
+// Gesamten Verlauf loeschen (Weboberflaeche / blaue Taste in der App)
+function clearAll() {
+  data.last = null;
+  data.positions = {};
+  flush();
+}
+
 function forgetShare(shareId) {
   delete data.positions[shareId];
   if (data.last && data.last.share === shareId) data.last = null;
@@ -124,6 +131,9 @@ module.exports = {
   positionsFor: positionsFor,
   getLast: getLast,
   forgetShare: forgetShare,
+  clearAll: clearAll,
+  count: count,
   resumable: resumable,
-  flush: flush
+  flush: flush,
+  file: file
 };

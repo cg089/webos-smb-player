@@ -39,6 +39,11 @@ function loadInfo() {
     row('Konfiguration', i.configFile);
     row('Zugriffsschutz', i.hasAdminPassword ? 'aktiv' : 'aus');
     $('s_autoResume').checked = !!i.autoResume;
+    var n = i.historyCount || 0;
+    $('historyInfo').textContent = n
+      ? n + (n === 1 ? ' Video' : ' Videos') + ' im Verlauf (gespeichert in ' + i.playstateFile + ')'
+      : 'Der Verlauf ist leer. Gespeichert wird in ' + i.playstateFile;
+    $('btnClearHistory').disabled = n === 0;
   }).catch(function () {
     $('info').textContent = 'Status nicht verfügbar.';
   });
@@ -157,6 +162,17 @@ $('s_autoResume').onchange = function () {
     show($('settingsResult'), 'ok', box.checked ? 'Gespeichert: Die App setzt beim Start automatisch fort.' : 'Gespeichert: Die App startet mit der Freigabenliste.');
   }).catch(function (e) {
     box.checked = !box.checked;
+    show($('settingsResult'), 'err', 'Anfrage fehlgeschlagen: ' + e.message);
+  });
+};
+
+$('btnClearHistory').onclick = function () {
+  if (!confirm('Den gesamten Verlauf (zuletzt gespielt und gemerkte Positionen) wirklich löschen?')) return;
+  api('POST', '/api/history', { clear: 'all' }).then(function (r) {
+    if (!r.ok) return show($('settingsResult'), 'err', r.error || 'Löschen fehlgeschlagen');
+    show($('settingsResult'), 'ok', 'Verlauf gelöscht. Die App zeigt kein „Fortsetzen“ mehr an.');
+    loadInfo();
+  }).catch(function (e) {
     show($('settingsResult'), 'err', 'Anfrage fehlgeschlagen: ' + e.message);
   });
 };

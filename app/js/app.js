@@ -5,13 +5,14 @@
   var SERVICE_URI = 'luna://org.smbstream.app.service/';
   var DEFAULT_PORT = 8765;
   var MEDIA_EXT = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|mts|mpg|mpeg|wmv|webm|flv|3gp|vob|divx|mp3|flac|m4a|aac|ogg|wav)$/i;
-  var ROWS = 10;               // sichtbare Listenzeilen (Zeilenhoehe 84 px)
+  var ROWS = 10;               // sichtbare Zeilen in der Freigabenliste (Zeilenhoehe 84 px)
+  var COMPACT_ROWS = 19;       // sichtbare Zeilen in Ordnerlisten (Zeilenhoehe 44 px, wie die Kanalliste der IPTV-App)
   var MIN_RESUME = 15;         // erste Sekunden: nicht zum Fortsetzen merken
   var END_MARGIN = 30;         // letzte Sekunden: gilt als zu Ende gesehen
 
   var K = {
     LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, BACK: 461, BACKSPACE: 8, ESC: 27,
-    PLAY: 415, PAUSE: 19, STOP: 413, REW: 412, FF: 417, RED: 403, YELLOW: 405, CH_UP: 427, CH_DOWN: 428
+    PLAY: 415, PAUSE: 19, STOP: 413, REW: 412, FF: 417, RED: 403, GREEN: 404, YELLOW: 405, BLUE: 406, CH_UP: 427, CH_DOWN: 428
   };
 
   var state = {
@@ -152,13 +153,14 @@
   function VList(ul, rows, onChange, onActivate) {
     this.ul = ul;
     this.rows = rows;
+    var created = Math.max(rows, COMPACT_ROWS);
     this.items = [];
     this.focus = 0;
     this.top = 0;
     this.lis = [];
     this.onChange = onChange;
     this.onActivate = onActivate;
-    for (var i = 0; i < rows; i++) {
+    for (var i = 0; i < created; i++) {
       var li = this.makeRow(i);
       ul.appendChild(li);
       this.lis.push(li);
@@ -192,10 +194,10 @@
   };
 
   VList.prototype.render = function () {
-    for (var i = 0; i < this.rows; i++) {
+    for (var i = 0; i < this.lis.length; i++) {
       var li = this.lis[i];
       var idx = this.top + i;
-      if (idx >= this.items.length) { li.style.display = 'none'; continue; }
+      if (i >= this.rows || idx >= this.items.length) { li.style.display = 'none'; continue; }
       var it = this.items[idx];
       li.style.display = '';
       li.className = idx === this.focus ? 'focus' : '';
@@ -268,7 +270,7 @@
       p = item.last;
       chan.textContent = p.shareName + ' · /' + p.dir;
       title.textContent = p.name;
-      desc.textContent = seenText(p) + '\n\nOK: Fortsetzen\nRot: Von vorn';
+      desc.textContent = seenText(p) + '\n\nOK: Fortsetzen\nRot: Von vorn\nGrün: Aus Verlauf entfernen';
     } else if (item.kind === 'share') {
       var s = item.share;
       chan.textContent = '\\\\' + s.host + (s.port !== 445 ? ':' + s.port : '') + '\\' + s.share;
@@ -285,7 +287,7 @@
       size.textContent = fmtSize(item.size);
       date.textContent = fmtDate(item.mtime);
       p = item.pos;
-      desc.textContent = p ? seenText(p) + '\n\nOK: Fortsetzen\nRot: Von vorn' : 'Noch nicht gesehen.\n\nOK: Abspielen';
+      desc.textContent = p ? seenText(p) + '\n\nOK: Fortsetzen\nRot: Von vorn\nGrün: Vergessen' : 'Noch nicht gesehen.\n\nOK: Abspielen';
     }
     if (item.pct !== undefined && item.pct !== null) {
       prog.hidden = false;
@@ -377,7 +379,10 @@
 
   // ------------------------------------------------------------------ Navigation
 
-  function showList(items, focus) {
+  // compact: Ordnerlisten mit 19 schmalen Zeilen, Freigabenliste mit 10 grossen
+  function showList(items, focus, compact) {
+    list.rows = compact ? COMPACT_ROWS : ROWS;
+    $('list').className = 'vlist' + (compact ? ' cols' : '');
     list.setItems(items, focus);
     $('empty').hidden = items.length > 0;
   }
@@ -403,8 +408,8 @@
     $('title').textContent = 'SMB Player';
     $('crumb').textContent = 'Freigaben';
     $('empty').textContent = '';
-    $('foot').textContent = 'OK Öffnen   ·   Gelb Neu laden   ·   Einrichtung am PC: ' + configUrl();
-    showList(items, 0);
+    $('foot').textContent = 'OK Öffnen   ·   Gelb Neu laden   ·   Blau Verlauf löschen   ·   Einrichtung am PC: ' + configUrl();
+    showList(items, 0, false);
     showScreen('browse');
   }
 
@@ -457,8 +462,8 @@
     $('title').textContent = state.share.name;
     $('crumb').textContent = '/' + state.path;
     $('empty').textContent = 'Keine Ordner oder Videos in diesem Ordner.';
-    $('foot').textContent = 'OK Öffnen / Abspielen   ·   Rot Von vorn   ·   Zurück Eine Ebene höher';
-    showList(items, focusIndex);
+    $('foot').textContent = 'OK Öffnen / Abspielen   ·   Rot Von vorn   ·   Grün Vergessen   ·   Zurück Zurück';
+    showList(items, focusIndex, true);
 
     var pp = state.pendingPlay;
     state.pendingPlay = null;
@@ -530,6 +535,36 @@
       delete state.pos[shareId][path];
       if (state.last && state.last.share === shareId && state.last.path === path) state.last = null;
     }
+  }
+
+  // Gruene Taste: gemerkte Position der markierten Datei entfernen
+  function forgetCurrent() {
+    var it = list.current();
+    var sid, path;
+    if (it && it.kind === 'resume') { sid = it.last.share; path = it.last.path; }
+    else if (it && it.kind === 'file' && it.pos && state.share) { sid = state.share.id; path = joinPath(state.path, it.name); }
+    else return toast('Für diesen Eintrag ist nichts gemerkt');
+    postJson('/api/position', { share: sid, path: path, clear: true });
+    if (state.pos[sid]) delete state.pos[sid][path];
+    if (state.last && state.last.share === sid && state.last.path === path) state.last = null;
+    toast('Aus dem Verlauf entfernt');
+    if (state.mode === 'home') goHome(); else refreshItems();
+  }
+
+  // Blaue Taste: ganzen Verlauf loeschen, zur Sicherheit erst nach zweitem Druck
+  var clearArmed = 0;
+  function clearHistory() {
+    var now = new Date().getTime();
+    if (now - clearArmed > 5000) {
+      clearArmed = now;
+      return toast('Gesamten Verlauf löschen? Blau noch einmal drücken');
+    }
+    clearArmed = 0;
+    postJson('/api/history', { clear: 'all' });
+    state.pos = {};
+    state.last = null;
+    toast('Verlauf gelöscht');
+    if (state.mode === 'home') goHome(); else refreshItems();
   }
 
   // Frische Fortschrittsbalken nach der Wiedergabe
@@ -757,8 +792,8 @@
       switch (code) {
         case K.UP: list.move(-1); break;
         case K.DOWN: list.move(1); break;
-        case K.CH_UP: case K.LEFT: list.move(-ROWS + 1); break;
-        case K.CH_DOWN: case K.RIGHT: list.move(ROWS - 1); break;
+        case K.CH_UP: case K.LEFT: list.move(-list.rows + 1); break;
+        case K.CH_DOWN: case K.RIGHT: list.move(list.rows - 1); break;
         case K.ENTER: activate(); break;
         case K.RED:
           var it = list.current();
@@ -769,6 +804,8 @@
         case K.YELLOW:
           if (state.mode === 'home') loadShares(false);
           break;
+        case K.GREEN: forgetCurrent(); break;
+        case K.BLUE: clearHistory(); break;
         default: handled = false;
       }
     } else if (state.screen === 'message') {

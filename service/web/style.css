@@ -48,6 +48,8 @@ button.primary { background: var(--accent); color: var(--accent-text); border-co
 button.ghost { background: transparent; }
 button.danger { color: var(--err); }
 button:disabled { opacity: .6; cursor: progress; }
+.history { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
+.history .hint { margin: 0; }
 .buttons { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
 .actions { display: flex; gap: 8px; }
 .result { margin-top: 14px; padding: 10px 12px; border-radius: 8px; font-size: 15px; overflow-wrap: anywhere; }
