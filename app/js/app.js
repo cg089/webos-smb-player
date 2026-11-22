@@ -587,6 +587,8 @@
   var osdTimer = 0, seekTimer = 0, lastReport = 0;
   var seekTarget = null;
   var resumeTo = 0;
+  var resumeFix = null;         // { target, req, tries }: Sprung zur Fortsetzungsstelle wird nachgeregelt
+  var resumeTimer = 0;
   var reportReady = false;      // erst melden, wenn die Wiedergabe an der Fortsetzungsstelle angekommen ist
   var cur = null;               // { path, name }
 
@@ -630,6 +632,27 @@
     }
   }
 
+  var RESUME_TOLERANCE = 10;    // Sekunden
+  var RESUME_TRIES = 4;
+
+  function checkResume() {
+    var f = resumeFix;
+    if (!f || video.seeking) return;
+    var err = f.target - video.currentTime;
+    if (Math.abs(err) <= RESUME_TOLERANCE) {
+      resumeFix = null;
+      return;
+    }
+    if (f.tries >= RESUME_TRIES) {
+      resumeFix = null;
+      return toast('Genaues Springen nicht möglich – Start bei ' + fmtTime(video.currentTime));
+    }
+    f.tries++;
+    f.req = Math.max(0, Math.min(video.duration - 5, f.req + err));
+    $('buffering').hidden = false;
+    try { video.currentTime = f.req; } catch (e) { resumeFix = null; }
+  }
+
   function play(index, fromStart) {
     var item = list.items[index];
     if (!item || item.kind !== 'file') return;
@@ -642,6 +665,8 @@
     seekTarget = null;
     reportReady = false;
     lastReport = 0;
+    resumeFix = null;
+    clearTimeout(resumeTimer);
 
     $('osdName').textContent = item.name;
     $('osdGroup').textContent = state.share.name + ' · /' + state.path;
@@ -656,6 +681,7 @@
 
     video.onloadedmetadata = function () {
       if (resumeTo > 0 && resumeTo < video.duration - END_MARGIN) {
+        resumeFix = { target: resumeTo, req: resumeTo, tries: 0 };
         try { video.currentTime = resumeTo; } catch (e) { /* ignorieren */ }
         toast('Fortgesetzt bei ' + fmtTime(resumeTo) + '  ·  Rot: von vorn');
       } else {
@@ -665,7 +691,12 @@
     };
     video.onplaying = function () { $('buffering').hidden = true; showOsd(false); updateOsd(); };
     video.onwaiting = function () { $('buffering').hidden = false; };
-    video.onseeked = function () { $('buffering').hidden = true; };
+    video.onseeked = function () {
+      $('buffering').hidden = true;
+      // Dateien ohne Index (z. B. TS-Aufnahmen) springt der Player nur grob an. Kurz warten, bis die
+      // echte Position feststeht, und den Sprung dann nachregeln.
+      if (resumeFix) { clearTimeout(resumeTimer); resumeTimer = setTimeout(checkResume, 1500); }
+    };
     video.onpause = function () { updateOsd(); showOsd(true); };
     video.ontimeupdate = function () {
       updateOsd();
@@ -682,6 +713,8 @@
   }
 
   function stopVideo() {
+    resumeFix = null;
+    clearTimeout(resumeTimer);
     video.onloadedmetadata = video.onplaying = video.onwaiting = video.onseeked = null;
     video.onpause = video.ontimeupdate = video.onended = video.onerror = null;
     try { video.pause(); } catch (e) { /* ignorieren */ }
@@ -740,6 +773,7 @@
 
   function seekBy(delta) {
     if (!isFinite(video.duration)) return;
+    resumeFix = null;
     var base = seekTarget !== null ? seekTarget : video.currentTime;
     seekTarget = Math.max(0, Math.min(video.duration - 1, base + delta));
     showOsd(false);
