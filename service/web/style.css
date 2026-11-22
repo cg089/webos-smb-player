@@ -35,6 +35,8 @@ dd { margin: 0; overflow-wrap: anywhere; }
 label { display: block; font-size: 14px; color: var(--muted); margin: 12px 0 0; }
 input { display: block; width: 100%; margin-top: 4px; padding: 10px 12px; font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line); border-radius: 8px; }
 input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+label.check { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--text); font-size: 16px; }
+label.check input { display: inline-block; width: auto; margin: 0; }
 .grid { display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
 .grid:has(#f_username) { grid-template-columns: 1fr 1fr; }
 .grid:has(#a_pw) { grid-template-columns: 1fr auto; align-items: end; }

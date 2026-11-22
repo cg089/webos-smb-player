@@ -33,16 +33,18 @@ Es lassen sich beliebig viele Freigaben anlegen. Optional kann ein Startordner i
 | Taste | Liste | Player |
 |---|---|---|
 | ▲ ▼ | Auswahl | ▲ +60 s, ▼ −60 s |
-| ◀ ▶ | | −10 s / +10 s |
+| ◀ ▶ | 9 Zeilen springen | −10 s / +10 s |
 | OK | Öffnen / Abspielen | Play/Pause |
 | Zurück | Eine Ebene höher, ganz oben: App beenden | Player schließen |
 | Play / Pause / Stop | | wie üblich |
 | ⏪ / ⏩ | | −30 s / +30 s |
-| Rot | | Von vorn starten |
+| Rot | Datei bzw. „Fortsetzen“-Zeile von vorn abspielen | Von vorn starten |
 | Gelb (Startseite) | Freigaben neu laden | |
 | CH ▲ ▼ | 8 Zeilen springen | |
 
-* Die **Abspielposition** wird gespeichert; beim nächsten Start geht es automatisch dort weiter.
+* **Fortsetzen:** Die App merkt sich pro Datei, wo du aufgehört hast. Ganz oben in der Freigabenliste steht „Fortsetzen: <zuletzt gespielte Datei>“, mit OK geht es an der Stelle weiter, auch wenn die Datei tief in Unterordnern liegt. In den Ordnerlisten zeigt ein **Fortschrittsbalken**, wie weit eine Datei schon gesehen wurde. Die ersten 15 Sekunden und die letzten 30 Sekunden werden nicht gemerkt, zu Ende gesehene Dateien fangen wieder von vorn an.
+* **Automatisch fortsetzen:** In der Einrichtungsseite unter „Wiedergabe“ lässt sich einschalten, dass die App beim Start sofort an der letzten Stelle weiterspielt.
+* **Aussehen:** Receiver-Stil wie beim IPTV-Player: blaue Fläche, lila Auswahlbalken, gelbe Zusatztexte, Uhr und ein Infofenster rechts (Größe, Datum, Fortschritt).
 * Nach dem Ende einer Datei startet automatisch die **nächste Datei im Ordner** (praktisch für Serien).
 * Magic Remote: Klicken und Mausrad funktionieren in den Listen.
 
@@ -53,12 +55,13 @@ Eine webOS-App läuft im Browser und kann kein SMB. Deshalb besteht das Paket au
 * **App** (`app/`): Oberfläche und Player (HTML/JS, ES5, für Chromium 53).
 * **Service** (`service/`): Node.js-Dienst auf dem Fernseher. Er spricht SMB (eigener, abhängigkeitsfreier SMB2-Client mit NTLMv2 und Signierung) und stellt die Dateien per HTTP mit Range-Unterstützung unter `http://127.0.0.1:8765/stream` bereit. Der `<video>`-Player des Fernsehers spielt diese Adresse ab, es decodiert also die Hardware des TVs. Derselbe Dienst liefert die Einrichtungsseite (Port **8765**).
 
-Die Konfiguration liegt in `/media/developer/apps/usr/palm/services/org.smbstream.app.service/data/config.json` (nur für den Besitzer lesbar). Die Passwörter stehen dort im Klartext, weil die SMB-Anmeldung sie braucht.
+Die Konfiguration liegt in `/media/developer/apps/usr/palm/services/org.smbstream.app.service/data/config.json` (nur für den Besitzer lesbar), der Wiedergabestand (zuletzt gespielt, Positionen) daneben in `playstate.json`. Die Passwörter stehen dort im Klartext, weil die SMB-Anmeldung sie braucht.
 
-**Wichtig bei App-Updates:** Das Installieren einer neuen IPK ersetzt den Dienstordner und damit auch die Konfiguration. Vorher sichern, danach zurückkopieren (per SSH auf dem TV):
+**Wichtig bei App-Updates:** Das Installieren einer neuen IPK ersetzt den Dienstordner und damit auch Konfiguration und Wiedergabestand. Vorher sichern, danach zurückkopieren (per SSH auf dem TV):
 
 ```bash
 cp /media/developer/apps/usr/palm/services/org.smbstream.app.service/data/config.json /media/developer/smbstream-config-backup.json
+cp /media/developer/apps/usr/palm/services/org.smbstream.app.service/data/playstate.json /media/developer/smbstream-playstate-backup.json
 ```
 
 Der Dienst läuft auf dem TV in einem abgeschotteten Bereich (Jail) und kann nur in seinem eigenen Ordner schreiben. Deshalb liegt die Konfiguration dort.
@@ -98,7 +101,9 @@ Braucht Node.js. Das Skript nutzt `ares-package` bzw. `npx @webos-tools/cli`.
 **Getestet** (am PC, gegen einen unabhängigen SMB2-Server mit NTLMv2-Anmeldung):
 Anmeldung inkl. falscher Zugangsdaten und falschem Freigabenamen, Ordnerlisten (auch Umlaute), Streaming mit Range-Anfragen (Bytevergleich per Hash, 40 MB mit ~80 MB/s), parallele Streams, Abbruch mitten im Transfer, SMB-Signierung, Pfad-Traversal-Schutz, Zugriffsschutz, Einrichtungsseite, die komplette TV-App in einem Browser (Navigation, Wiedergabe eines MP4 mit `moov` am Ende, Springen, Fortsetzen, nächste Folge, Fehlerfall), Paketstruktur per `ares-package --check`. Der Code besteht eine ES5-Syntaxprüfung.
 
-**Auf dem TV getestet** (75UK6200PLB, webOS 4.4.3, Node 0.12.2): Installation, Start des Dienstes über Luna, Einrichtungsseite, SMB-Anmeldung inkl. Fehlerfälle, Streaming mit Range-Anfragen (bytegleich), stabiler Speicherbedarf über mehrere 40-MB-Streams. Der SMB-Server lief dabei auf einem anderen Rechner und war über einen SSH-Tunnel angebunden, weil sich TV und PC im Netzwerk nicht sehen.
+Neu in dieser Fassung, am PC im Browser getestet: Fortsetzen (Startseite, Unterordner, Autostart beim App-Start), Fortschrittsbalken, Rote Taste, Schutz davor, dass ein sofortiges Zurück die gespeicherte Position überschreibt, nächste Folge automatisch, Wiedergabestand übersteht einen Neustart des Dienstes, Schutz der neuen Schnittstellen vor fremden Webseiten.
+
+**Auf dem TV getestet** (75UK6200PLB, webOS 4.4.3, Node 0.12.2; Fassung vor dem neuen Look und dem Fortsetzen): Installation, Start des Dienstes über Luna, Einrichtungsseite, SMB-Anmeldung inkl. Fehlerfälle, Streaming mit Range-Anfragen (bytegleich), stabiler Speicherbedarf über mehrere 40-MB-Streams. Der SMB-Server lief dabei auf einem anderen Rechner und war über einen SSH-Tunnel angebunden, weil sich TV und PC im Netzwerk nicht sehen.
 
 **Noch nicht getestet:** die Wiedergabe über den webOS-Player (Codecs, Springen), die Anmeldung an deinem konkreten NAS bzw. Server, der Durchsatz im normalen Heimnetz (die gemessenen ~5 MB/s stammen vom SSH-Tunnel und sind nicht aussagekräftig), das Startskript auf dem TV.
 

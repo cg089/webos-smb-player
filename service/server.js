@@ -9,6 +9,7 @@ var url = require('url');
 
 var config = require('./config');
 var pool = require('./smbpool');
+var playstate = require('./playstate');
 var bytes = require('./lib/bytes');
 var smbmod = require('./lib/smb2');
 var Smb2Client = smbmod.Smb2Client;
@@ -155,7 +156,8 @@ function handleInfo(req, res) {
     port: listeningPort,
     configFile: config.file,
     shareCount: config.data.shares.length,
-    hasAdminPassword: config.hasAdminPassword()
+    hasAdminPassword: config.hasAdminPassword(),
+    autoResume: config.data.autoResume
   });
 }
 
@@ -169,6 +171,7 @@ function handleShares(req, res, parts) {
 
   if (req.method === 'DELETE' && parts[2]) {
     var removed = config.deleteShare(parts[2]);
+    if (removed) playstate.forgetShare(parts[2]);
     return sendJson(res, removed ? 200 : 404, { ok: removed });
   }
   if (req.method === 'POST') {
@@ -232,6 +235,66 @@ function handleAdmin(req, res) {
     if (err) return sendError(res, 400, err.message);
     config.setAdminPassword(body.password || '');
     sendJson(res, 200, { ok: true, hasAdminPassword: config.hasAdminPassword() });
+  });
+}
+
+// ---- Wiedergabestand (zuletzt gespielt / Position pro Datei) ----
+
+// Schreibende Aufrufe: eigene Weboberflaeche (gleicher Ursprung) oder die TV-App (Loopback)
+function localOrSameOrigin(req) {
+  return sameOrigin(req) || isLoopback(req);
+}
+
+function lastInfo() {
+  var l = playstate.getLast();
+  if (!l) return null;
+  var share = config.findShare(l.share);
+  if (!share) return null;
+  var i = l.path.lastIndexOf('/');
+  return {
+    share: l.share,
+    shareName: share.name,
+    path: l.path,
+    dir: i < 0 ? '' : l.path.substring(0, i),
+    name: i < 0 ? l.path : l.path.substring(i + 1),
+    t: l.t,
+    d: l.d,
+    ts: l.ts
+  };
+}
+
+function handleLast(req, res) {
+  if (!localOrSameOrigin(req)) return sendError(res, 403, 'Fremder Ursprung nicht erlaubt');
+  sendJson(res, 200, { ok: true, autoResume: config.data.autoResume, last: lastInfo() });
+}
+
+function handlePositions(req, res, query) {
+  if (!localOrSameOrigin(req)) return sendError(res, 403, 'Fremder Ursprung nicht erlaubt');
+  if (!config.findShare(query.share)) return sendError(res, 404, 'Freigabe nicht gefunden');
+  sendJson(res, 200, { ok: true, positions: playstate.positionsFor(query.share) });
+}
+
+function handlePosition(req, res) {
+  if (req.method !== 'POST') return sendError(res, 405, 'Methode nicht erlaubt');
+  if (!localOrSameOrigin(req)) return sendError(res, 403, 'Fremder Ursprung nicht erlaubt');
+  readJson(req, function (err, body) {
+    if (err) return sendError(res, 400, err.message);
+    if (!config.findShare(body.share) || typeof body.path !== 'string' || !body.path) {
+      return sendError(res, 400, 'Freigabe oder Pfad fehlt');
+    }
+    if (body.clear === true) playstate.clearPosition(body.share, body.path);
+    else playstate.setPosition(body.share, body.path, body.t, body.d);
+    sendJson(res, 200, { ok: true });
+  });
+}
+
+function handleSettings(req, res) {
+  if (req.method !== 'POST') return sendError(res, 405, 'Methode nicht erlaubt');
+  if (!sameOrigin(req)) return sendError(res, 403, 'Fremder Ursprung nicht erlaubt');
+  readJson(req, function (err, body) {
+    if (err) return sendError(res, 400, err.message);
+    if (body.autoResume !== undefined) config.setAutoResume(body.autoResume === true);
+    sendJson(res, 200, { ok: true, autoResume: config.data.autoResume });
   });
 }
 
@@ -359,6 +422,10 @@ function route(req, res) {
     if (pathname === '/stream') return handleStream(req, res, u.query);
     if (pathname === '/api/info' || pathname === '/api/ping') return handleInfo(req, res);
     if (pathname === '/api/browse') return handleBrowse(req, res, u.query);
+    if (pathname === '/api/last') return handleLast(req, res);
+    if (pathname === '/api/positions') return handlePositions(req, res, u.query);
+    if (pathname === '/api/position') return handlePosition(req, res);
+    if (pathname === '/api/settings') return handleSettings(req, res);
     if (parts[1] === 'api' && parts[2] === 'shares') return handleShares(req, res, [parts[1], parts[2], parts[3] && decodeURIComponent(parts[3])]);
     if (pathname === '/api/test') return handleTest(req, res);
     if (pathname === '/api/admin') return handleAdmin(req, res);

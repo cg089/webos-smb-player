@@ -5,6 +5,9 @@
   var SERVICE_URI = 'luna://org.smbstream.app.service/';
   var DEFAULT_PORT = 8765;
   var MEDIA_EXT = /\.(mkv|mp4|m4v|mov|avi|ts|m2ts|mts|mpg|mpeg|wmv|webm|flv|3gp|vob|divx|mp3|flac|m4a|aac|ogg|wav)$/i;
+  var ROWS = 10;               // sichtbare Listenzeilen (Zeilenhoehe 84 px)
+  var MIN_RESUME = 15;         // erste Sekunden: nicht zum Fortsetzen merken
+  var END_MARGIN = 30;         // letzte Sekunden: gilt als zu Ende gesehen
 
   var K = {
     LEFT: 37, UP: 38, RIGHT: 39, DOWN: 40, ENTER: 13, BACK: 461, BACKSPACE: 8, ESC: 27,
@@ -17,12 +20,14 @@
     info: null,
     shares: [],
     share: null,
-    path: '',            // Pfad innerhalb der Freigabe, Segmente mit "/"
-    entries: [],         // aktuelle Eintraege (nur Ordner und abspielbare Dateien)
-    items: [],           // dargestellte Zeilen
-    focus: 0,
-    stack: [],           // gemerkte Fokuspositionen beim Eintauchen in Ordner
+    mode: 'home',          // 'home' (Freigaben) oder 'dir' (Ordner einer Freigabe)
+    path: '',              // Pfad innerhalb der Freigabe, Segmente mit "/"
+    stack: [],             // gemerkte Fokuspositionen beim Eintauchen in Ordner
     playingIndex: -1,
+    pos: {},               // shareId -> { pfad: { t, d } }  (Stand vom Dienst, lokal nachgefuehrt)
+    last: null,            // zuletzt gespielte Datei { share, shareName, path, dir, name, t, d }
+    autoResume: false,
+    pendingPlay: null,     // { name, fromStart }: nach dem Laden des Ordners direkt abspielen
     messageAction: null,
     messageBack: null
   };
@@ -30,14 +35,6 @@
   function $(id) { return document.getElementById(id); }
 
   // ------------------------------------------------------------------ Hilfen
-
-  function store(key, value) {
-    try {
-      if (value === undefined) { var v = window.localStorage.getItem(key); return v === null ? null : v; }
-      if (value === null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, value);
-    } catch (e) { /* localStorage nicht verfuegbar */ }
-    return null;
-  }
 
   function pad2(n) { return (n < 10 ? '0' : '') + n; }
 
@@ -48,12 +45,29 @@
     return (h > 0 ? h + ':' + pad2(m) : m) + ':' + pad2(s);
   }
 
+  function fmtClock() {
+    var d = new Date();
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes());
+  }
+
+  function fmtDate(ms) {
+    if (!ms) return '';
+    var d = new Date(ms);
+    return pad2(d.getDate()) + '.' + pad2(d.getMonth() + 1) + '.' + d.getFullYear();
+  }
+
   function fmtSize(b) {
     if (b >= 1073741824) return (b / 1073741824).toFixed(1).replace('.', ',') + ' GB';
     if (b >= 1048576) return Math.round(b / 1048576) + ' MB';
     if (b >= 1024) return Math.round(b / 1024) + ' KB';
     return b + ' B';
   }
+
+  function enc(s) { return encodeURIComponent(s); }
+  function joinPath(dir, name) { return dir ? dir + '/' + name : name; }
+  function parentPath(p) { var i = p.lastIndexOf('/'); return i < 0 ? '' : p.substring(0, i); }
+  function resumable(t, d) { return t >= MIN_RESUME && d > 0 && t <= d - END_MARGIN; }
+  function pct(t, d) { return d > 0 ? Math.max(0, Math.min(100, Math.round(t / d * 100))) : 0; }
 
   function showScreen(name) {
     var all = ['Loading', 'Message', 'Browse', 'Player'];
@@ -68,11 +82,11 @@
     window.close();
   }
 
-  function getJson(url, cb, timeoutMs) {
+  function xhr(method, path, body, cb, timeoutMs) {
     var x = new XMLHttpRequest();
     var done = false;
-    function finish(err, data) { if (done) return; done = true; cb(err, data); }
-    x.open('GET', url, true);
+    function finish(err, data) { if (done) return; done = true; if (cb) cb(err, data); }
+    x.open(method, state.base + path, true);
     x.timeout = timeoutMs || 15000;
     x.onload = function () {
       var d = null;
@@ -82,8 +96,16 @@
     };
     x.onerror = function () { finish(new Error('Dienst nicht erreichbar')); };
     x.ontimeout = function () { finish(new Error('Zeitüberschreitung')); };
-    x.send();
+    if (body !== null && body !== undefined) {
+      x.setRequestHeader('Content-Type', 'text/plain');   // text/plain: keine CORS-Vorabfrage noetig
+      x.send(JSON.stringify(body));
+    } else {
+      x.send();
+    }
   }
+
+  function getJson(path, cb, timeoutMs) { xhr('GET', path, null, cb, timeoutMs); }
+  function postJson(path, body, cb) { xhr('POST', path, body, cb, 8000); }
 
   function lunaCall(method, params, cb) {
     try {
@@ -96,6 +118,178 @@
       bridge.call(SERVICE_URI + method, JSON.stringify(params || {}));
     } catch (e) {
       cb({ returnValue: false, errorText: 'Luna-Dienstaufruf nicht möglich (' + (e && e.message) + ')' });
+    }
+  }
+
+  var toastTimer = 0;
+  function toast(text) {
+    var t = $('toast');
+    t.textContent = text;
+    t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 4000);
+  }
+
+  // ------------------------------------------------------------------ Uhr
+
+  function tickClock() {
+    var t = fmtClock();
+    $('clock').textContent = t;
+    $('osdClock').textContent = t;
+  }
+  setInterval(tickClock, 15000);
+  tickClock();
+
+  // ------------------------------------------------------------------ Virtuelle Liste
+  // Feste Zeilenhoehe, nur ROWS Zeilen existieren im DOM. Bei tausenden Dateien bleibt das flott.
+
+  function span(cls) {
+    var e = document.createElement('span');
+    e.className = cls;
+    return e;
+  }
+
+  function VList(ul, rows, onChange, onActivate) {
+    this.ul = ul;
+    this.rows = rows;
+    this.items = [];
+    this.focus = 0;
+    this.top = 0;
+    this.lis = [];
+    this.onChange = onChange;
+    this.onActivate = onActivate;
+    for (var i = 0; i < rows; i++) {
+      var li = this.makeRow(i);
+      ul.appendChild(li);
+      this.lis.push(li);
+    }
+  }
+
+  VList.prototype.makeRow = function (slot) {
+    var self = this;
+    var li = document.createElement('li');
+    li._ico = span('ico');
+    li._bar = span('pbar');
+    li._fill = span('pfill');
+    li._bar.appendChild(li._fill);
+    var txt = document.createElement('div');
+    txt.className = 'txt';
+    li._name = span('name');
+    li._sub = span('sub');
+    txt.appendChild(li._name);
+    txt.appendChild(li._sub);
+    li._meta = span('meta');
+    li.appendChild(li._ico);
+    li.appendChild(li._bar);
+    li.appendChild(txt);
+    li.appendChild(li._meta);
+    li._slot = slot;
+    li.onclick = function () {
+      var idx = self.top + li._slot;
+      if (idx < self.items.length) { self.setFocus(idx); if (self.onActivate) self.onActivate(); }
+    };
+    return li;
+  };
+
+  VList.prototype.render = function () {
+    for (var i = 0; i < this.rows; i++) {
+      var li = this.lis[i];
+      var idx = this.top + i;
+      if (idx >= this.items.length) { li.style.display = 'none'; continue; }
+      var it = this.items[idx];
+      li.style.display = '';
+      li.className = idx === this.focus ? 'focus' : '';
+      li._ico.className = 'ico ' + it.kind;
+      if (it.pct === undefined || it.pct === null) {
+        li._bar.style.display = 'none';
+      } else {
+        li._bar.style.display = 'block';
+        li._fill.style.width = it.pct + '%';
+      }
+      li._name.textContent = it.name;
+      li._sub.textContent = it.sub || '';
+      li._sub.style.display = it.sub ? 'block' : 'none';
+      li._meta.textContent = it.meta || '';
+    }
+  };
+
+  VList.prototype.setItems = function (items, focus) {
+    this.items = items;
+    this.focus = Math.max(0, Math.min(items.length - 1, focus || 0));
+    this.top = Math.max(0, Math.min(items.length - this.rows, this.focus - Math.floor(this.rows / 2)));
+    this.render();
+    if (this.onChange) this.onChange(this.current());
+  };
+
+  VList.prototype.setFocus = function (idx) {
+    if (!this.items.length) return;
+    idx = Math.max(0, Math.min(this.items.length - 1, idx));
+    if (idx < this.top) this.top = idx;
+    else if (idx >= this.top + this.rows) this.top = idx - this.rows + 1;
+    this.focus = idx;
+    this.render();
+    if (this.onChange) this.onChange(this.current());
+  };
+
+  VList.prototype.move = function (delta) { this.setFocus(this.focus + delta); };
+  VList.prototype.current = function () { return this.items[this.focus] || null; };
+
+  var list = new VList($('list'), ROWS, updateSide, function () { activate(); });
+
+  // ------------------------------------------------------------------ Infofenster rechts
+
+  function posOf(shareId, path) {
+    var m = state.pos[shareId];
+    return m ? m[path] : null;
+  }
+
+  function seenText(p) {
+    return 'Zuletzt gesehen bei ' + fmtTime(p.t) + ' von ' + fmtTime(p.d) + '.';
+  }
+
+  function updateSide(item) {
+    var ico = $('sideIco'), size = $('sideSize'), date = $('sideDate'), chan = $('sideChan');
+    var title = $('sideTitle'), desc = $('sideDesc'), prog = $('sideProg');
+    size.textContent = '';
+    date.textContent = '';
+    prog.hidden = true;
+    if (!item) {
+      ico.className = 'ico';
+      chan.textContent = '';
+      title.textContent = '';
+      desc.textContent = '';
+      return;
+    }
+    ico.className = 'ico ' + item.kind;
+    var where = state.share ? state.share.name + ' · /' + state.path : '';
+    var p = null;
+
+    if (item.kind === 'resume') {
+      p = item.last;
+      chan.textContent = p.shareName + ' · /' + p.dir;
+      title.textContent = p.name;
+      desc.textContent = seenText(p) + '\n\nOK: Fortsetzen\nRot: Von vorn';
+    } else if (item.kind === 'share') {
+      var s = item.share;
+      chan.textContent = '\\\\' + s.host + (s.port !== 445 ? ':' + s.port : '') + '\\' + s.share;
+      title.textContent = s.name;
+      desc.textContent = (s.username ? 'Benutzer: ' + s.username : 'Gast (ohne Anmeldung)') +
+        (s.subpath ? '\nStartordner: /' + s.subpath : '');
+    } else if (item.kind === 'dir') {
+      chan.textContent = where;
+      title.textContent = item.name;
+      desc.textContent = 'Ordner';
+    } else {
+      chan.textContent = where;
+      title.textContent = item.name;
+      size.textContent = fmtSize(item.size);
+      date.textContent = fmtDate(item.mtime);
+      p = item.pos;
+      desc.textContent = p ? seenText(p) + '\n\nOK: Fortsetzen\nRot: Von vorn' : 'Noch nicht gesehen.\n\nOK: Abspielen';
+    }
+    if (item.pct !== undefined && item.pct !== null) {
+      prog.hidden = false;
+      $('sideProgFill').style.width = item.pct + '%';
     }
   }
 
@@ -113,7 +307,7 @@
   }
 
   function tryInfo(cb) {
-    getJson(state.base + '/api/info', function (err, info) {
+    getJson('/api/info', function (err, info) {
       if (err) return cb(false);
       state.info = info;
       cb(true);
@@ -122,7 +316,7 @@
 
   function pollInfo(n, lunaRes) {
     tryInfo(function (ok) {
-      if (ok) return loadShares();
+      if (ok) return loadShares(true);
       if (n >= 25) {
         var detail = (lunaRes && lunaRes.errorText) ? lunaRes.errorText : 'keine Antwort vom Dienst';
         return showMessage('Dienst nicht erreichbar',
@@ -136,7 +330,7 @@
   function boot() {
     setLoading('Starte Dienst …');
     tryInfo(function (ok) {
-      if (ok) return loadShares();
+      if (ok) return loadShares(true);
       lunaCall('start', {}, function (res) {
         if (res && res.port) state.base = 'http://127.0.0.1:' + res.port;
         pollInfo(0, res);
@@ -150,225 +344,287 @@
     return 'http://' + ip + ':' + (info.port || DEFAULT_PORT) + '/';
   }
 
-  function loadShares() {
+  function findShare(id) {
+    for (var i = 0; i < state.shares.length; i++) if (state.shares[i].id === id) return state.shares[i];
+    return null;
+  }
+
+  function lastResumable() {
+    var l = state.last;
+    return !!(l && resumable(l.t, l.d) && findShare(l.share));
+  }
+
+  // first = App-Start: dann wird bei aktivierter Einstellung automatisch fortgesetzt
+  function loadShares(first) {
     setLoading('Lade Freigaben …');
-    getJson(state.base + '/api/shares', function (err, data) {
+    getJson('/api/shares', function (err, data) {
       if (err) return showMessage('Fehler', err.message, '', boot);
       state.shares = data.shares || [];
       if (state.shares.length === 0) {
         return showMessage('Noch keine Freigabe eingerichtet',
           'Öffne auf einem PC oder Handy im selben Netzwerk:',
           configUrl() + '   –   dort die SMB-Freigabe anlegen, danach hier OK drücken.',
-          loadShares);
+          function () { loadShares(false); });
       }
-      goHome();
+      getJson('/api/last', function (e2, d2) {
+        state.last = (!e2 && d2 && d2.last) ? d2.last : null;
+        state.autoResume = !!(!e2 && d2 && d2.autoResume === true);
+        if (first && state.autoResume && lastResumable()) return resumeLast(false);
+        goHome();
+      });
     });
   }
 
-  // ------------------------------------------------------------------ Liste
+  // ------------------------------------------------------------------ Navigation
 
-  function renderList() {
-    var ul = $('list');
-    ul.textContent = '';
-    var items = state.items;
-    for (var i = 0; i < items.length; i++) {
-      ul.appendChild(buildRow(items[i], i));
-    }
+  function showList(items, focus) {
+    list.setItems(items, focus);
     $('empty').hidden = items.length > 0;
-    setFocus(state.focus, true);
-  }
-
-  function buildRow(item, index) {
-    var li = document.createElement('li');
-    var ico = document.createElement('span');
-    ico.className = 'ico ' + item.kind;
-    li.appendChild(ico);
-    var name = document.createElement('span');
-    name.className = 'name';
-    name.textContent = item.name;
-    li.appendChild(name);
-    if (item.sub) {
-      var sub = document.createElement('span');
-      sub.className = 'sub';
-      sub.textContent = item.sub;
-      li.appendChild(sub);
-    }
-    if (item.meta) {
-      var meta = document.createElement('span');
-      meta.className = 'meta';
-      meta.textContent = item.meta;
-      li.appendChild(meta);
-    }
-    li.onclick = function () { setFocus(index); activate(); };
-    return li;
-  }
-
-  function setFocus(index, noScroll) {
-    var ul = $('list');
-    var rows = ul.children;
-    if (!rows.length) return;
-    index = Math.max(0, Math.min(rows.length - 1, index));
-    if (rows[state.focus]) rows[state.focus].className = '';
-    state.focus = index;
-    var row = rows[index];
-    row.className = 'focus';
-    if (noScroll === true && index === 0) { ul.scrollTop = 0; return; }
-    var top = row.offsetTop;
-    var h = row.offsetHeight;
-    if (top < ul.scrollTop + 8) ul.scrollTop = Math.max(0, top - 8);
-    else if (top + h > ul.scrollTop + ul.clientHeight - 8) ul.scrollTop = top + h - ul.clientHeight + 8;
   }
 
   function goHome() {
+    state.mode = 'home';
     state.share = null;
     state.path = '';
     state.stack = [];
-    state.entries = [];
-    state.items = state.shares.map(function (s) {
-      return { kind: 'share', name: s.name, sub: '\\\\' + s.host + '\\' + s.share, share: s };
-    });
+    var items = [];
+    if (lastResumable()) {
+      var l = state.last;
+      items.push({
+        kind: 'resume', name: 'Fortsetzen: ' + l.name,
+        sub: l.shareName + (l.dir ? ' · /' + l.dir : ''),
+        meta: fmtTime(l.t) + ' / ' + fmtTime(l.d), pct: pct(l.t, l.d), last: l
+      });
+    }
+    for (var i = 0; i < state.shares.length; i++) {
+      var s = state.shares[i];
+      items.push({ kind: 'share', name: s.name, sub: '\\\\' + s.host + '\\' + s.share, share: s });
+    }
     $('title').textContent = 'SMB Player';
     $('crumb').textContent = 'Freigaben';
     $('empty').textContent = '';
-    $('foot').textContent = 'Einrichtung am PC/Handy: ' + configUrl() + '     ·     Gelb: Neu laden';
-    state.focus = 0;
+    $('foot').textContent = 'OK Öffnen   ·   Gelb Neu laden   ·   Einrichtung am PC: ' + configUrl();
+    showList(items, 0);
     showScreen('browse');
-    renderList();
   }
 
   function openShare(share) {
+    state.mode = 'dir';
     state.share = share;
     state.path = '';
     state.stack = [];
     loadDir(0);
   }
 
+  function dirItems(entries) {
+    var out = [];
+    var sid = state.share.id;
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i];
+      if (e.isDir) {
+        out.push({ kind: 'dir', name: e.name });
+      } else if (MEDIA_EXT.test(e.name)) {
+        var p = posOf(sid, joinPath(state.path, e.name));
+        out.push({
+          kind: 'file', name: e.name, size: e.size, mtime: e.mtime, meta: fmtSize(e.size),
+          pos: p || null, pct: p ? pct(p.t, p.d) : null
+        });
+      }
+    }
+    return out;
+  }
+
   function loadDir(focusIndex) {
     setLoading('Lade Ordner …');
-    var url = state.base + '/api/browse?share=' + encodeURIComponent(state.share.id) +
-      '&path=' + encodeURIComponent(state.path);
-    getJson(url, function (err, data) {
+    var sid = state.share.id;
+    getJson('/api/browse?share=' + enc(sid) + '&path=' + enc(state.path), function (err, data) {
       if (err) {
+        state.pendingPlay = null;
         return showMessage('Ordner konnte nicht geladen werden', err.message, state.share.name,
           function () { loadDir(focusIndex); },
           function () { goBack(); });
       }
-      var out = [];
-      var all = data.entries || [];
-      for (var i = 0; i < all.length; i++) {
-        var e = all[i];
-        if (e.isDir) out.push({ kind: 'dir', name: e.name });
-        else if (MEDIA_EXT.test(e.name)) out.push({ kind: 'file', name: e.name, meta: fmtSize(e.size), size: e.size });
-      }
-      state.items = out;
-      state.entries = out;
-      $('title').textContent = state.share.name;
-      $('crumb').textContent = '/' + state.path;
-      $('empty').textContent = 'Keine Ordner oder Videos in diesem Ordner.';
-      $('foot').textContent = 'OK: Öffnen / Abspielen     ·     Zurück: Eine Ebene höher';
-      state.focus = focusIndex || 0;
-      showScreen('browse');
-      renderList();
+      getJson('/api/positions?share=' + enc(sid), function (e2, d2) {
+        if (!e2 && d2 && d2.positions) state.pos[sid] = d2.positions;
+        buildDir(data.entries || [], focusIndex);
+      });
     });
   }
 
-  function joinPath(dir, name) { return dir ? dir + '/' + name : name; }
+  function buildDir(entries, focusIndex) {
+    var items = dirItems(entries);
+    state.mode = 'dir';
+    $('title').textContent = state.share.name;
+    $('crumb').textContent = '/' + state.path;
+    $('empty').textContent = 'Keine Ordner oder Videos in diesem Ordner.';
+    $('foot').textContent = 'OK Öffnen / Abspielen   ·   Rot Von vorn   ·   Zurück Eine Ebene höher';
+    showList(items, focusIndex);
 
-  function parentPath(p) {
-    var i = p.lastIndexOf('/');
-    return i < 0 ? '' : p.substring(0, i);
+    var pp = state.pendingPlay;
+    state.pendingPlay = null;
+    if (pp) {
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file' && items[i].name === pp.name) {
+          list.setFocus(i);
+          return play(i, pp.fromStart);
+        }
+      }
+      showScreen('browse');
+      return toast('Die Datei ist nicht mehr vorhanden');
+    }
+    showScreen('browse');
+  }
+
+  // Zuletzt gespielte Datei fortsetzen: erst in ihren Ordner wechseln (damit "Zurueck" und die
+  // naechste Folge sinnvoll funktionieren), dann abspielen.
+  function resumeLast(fromStart) {
+    var l = state.last;
+    var share = l && findShare(l.share);
+    if (!share) return goHome();
+    state.mode = 'dir';
+    state.share = share;
+    state.path = l.dir;
+    state.stack = [];
+    var depth = l.dir ? l.dir.split('/').length : 0;
+    for (var i = 0; i < depth; i++) state.stack.push(0);
+    state.pendingPlay = { name: l.name, fromStart: !!fromStart };
+    loadDir(0);
   }
 
   function activate() {
-    var item = state.items[state.focus];
+    var item = list.current();
     if (!item) return;
-    if (item.kind === 'share') {
+    if (item.kind === 'resume') {
+      resumeLast(false);
+    } else if (item.kind === 'share') {
       openShare(item.share);
     } else if (item.kind === 'dir') {
-      state.stack.push(state.focus);
+      state.stack.push(list.focus);
       state.path = joinPath(state.path, item.name);
       loadDir(0);
     } else {
-      play(state.focus);
+      play(list.focus, false);
     }
   }
 
   function goBack() {
-    if (!state.share) return exitApp();
+    if (state.mode === 'home' || !state.share) return exitApp();
     if (state.path === '') return goHome();
     state.path = parentPath(state.path);
     loadDir(state.stack.length ? state.stack.pop() : 0);
   }
 
-  // ------------------------------------------------------------------ Player
+  // ------------------------------------------------------------------ Wiedergabestand
 
-  var video = null;
-  var osdTimer = null, toastTimer = null, seekTimer = null, saveTimer = 0;
-  var seekTarget = null;
-  var resumeTo = 0;
-  var currentKey = '';
-  var currentName = '';
-
-  function posKey(path) { return 'pos:' + state.share.id + ':' + path; }
-
-  function savePosition() {
-    if (!video || !currentKey) return;
-    var t = video.currentTime, d = video.duration;
-    if (!isFinite(t) || !isFinite(d) || d <= 0) return;
-    if (t < 15 || t > d - 30) store(currentKey, null);
-    else store(currentKey, JSON.stringify({ t: Math.floor(t), d: Math.floor(d) }));
-  }
-
-  function showOsd(sticky) {
-    $('osd').hidden = false;
-    clearTimeout(osdTimer);
-    if (!sticky && video && !video.paused) {
-      osdTimer = setTimeout(function () { $('osd').hidden = true; }, 4000);
+  function setPosLocal(shareId, path, t, d) {
+    var sh = findShare(shareId);
+    if (!state.pos[shareId]) state.pos[shareId] = {};
+    if (resumable(t, d)) {
+      state.pos[shareId][path] = { t: t, d: d };
+      var i = path.lastIndexOf('/');
+      state.last = {
+        share: shareId, shareName: sh ? sh.name : '', path: path,
+        dir: i < 0 ? '' : path.substring(0, i), name: i < 0 ? path : path.substring(i + 1), t: t, d: d
+      };
+    } else {
+      delete state.pos[shareId][path];
+      if (state.last && state.last.share === shareId && state.last.path === path) state.last = null;
     }
   }
 
-  function toast(text) {
-    var t = $('toast');
-    t.textContent = text;
-    t.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(function () { t.hidden = true; }, 4000);
+  // Frische Fortschrittsbalken nach der Wiedergabe
+  function refreshItems() {
+    if (state.mode !== 'dir' || !state.share) return;
+    var items = list.items;
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].kind !== 'file') continue;
+      var p = posOf(state.share.id, joinPath(state.path, items[i].name));
+      items[i].pos = p || null;
+      items[i].pct = p ? pct(p.t, p.d) : null;
+    }
+    list.render();
+    updateSide(list.current());
+  }
+
+  // ------------------------------------------------------------------ Player
+
+  var video = $('video');
+  var osdTimer = 0, seekTimer = 0, lastReport = 0;
+  var seekTarget = null;
+  var resumeTo = 0;
+  var reportReady = false;      // erst melden, wenn die Wiedergabe an der Fortsetzungsstelle angekommen ist
+  var cur = null;               // { path, name }
+
+  function showOsd(sticky) {
+    $('osd').hidden = false;
+    tickClock();
+    clearTimeout(osdTimer);
+    if (!sticky && !video.paused) {
+      osdTimer = setTimeout(function () { $('osd').hidden = true; }, 5000);
+    }
   }
 
   function updateOsd() {
-    if (!video) return;
-    var cur = seekTarget !== null ? seekTarget : video.currentTime;
-    var dur = video.duration;
-    $('osdTime').textContent = fmtTime(cur) + ' / ' + fmtTime(dur);
-    $('osdFill').style.width = (isFinite(dur) && dur > 0 ? Math.min(100, cur / dur * 100) : 0) + '%';
-    $('osdState').textContent = video.paused ? '❚❚  Pause' : '▶';
+    if (!cur) return;
+    var t = seekTarget !== null ? seekTarget : video.currentTime;
+    var d = video.duration;
+    var known = isFinite(d) && d > 0;
+    $('osdState').className = video.paused ? 'pause' : 'play';
+    $('osdNow').textContent = fmtTime(t) + ' / ' + fmtTime(d) +
+      (known ? '   (noch ' + Math.max(0, Math.round((d - t) / 60)) + ' Min.)' : '');
+    $('osdFill').style.width = (known ? Math.min(100, t / d * 100) : 0) + '%';
   }
 
-  function play(index) {
-    var item = state.items[index];
+  function nextFileIndex() {
+    var items = list.items;
+    for (var i = state.playingIndex + 1; i < items.length; i++) if (items[i].kind === 'file') return i;
+    return -1;
+  }
+
+  function reportPosition() {
+    if (!cur || !reportReady || !state.share) return;
+    var t = Math.floor(video.currentTime), d = Math.floor(video.duration);
+    if (!isFinite(t) || !isFinite(d) || d <= 0) return;
+    var sid = state.share.id;
+    if (resumable(t, d)) {
+      setPosLocal(sid, cur.path, t, d);
+      postJson('/api/position', { share: sid, path: cur.path, t: t, d: d });
+    } else if (t > d - END_MARGIN) {
+      setPosLocal(sid, cur.path, t, d);
+      postJson('/api/position', { share: sid, path: cur.path, clear: true });
+    }
+  }
+
+  function play(index, fromStart) {
+    var item = list.items[index];
     if (!item || item.kind !== 'file') return;
     state.playingIndex = index;
-    video = $('video');
     var path = joinPath(state.path, item.name);
-    currentKey = posKey(path);
-    currentName = item.name;
-    resumeTo = 0;
+    cur = { path: path, name: item.name };
+
+    var pos = posOf(state.share.id, path);
+    resumeTo = (!fromStart && pos && resumable(pos.t, pos.d)) ? pos.t : 0;
     seekTarget = null;
+    reportReady = false;
+    lastReport = 0;
 
-    var saved = null;
-    try { saved = JSON.parse(store(currentKey) || 'null'); } catch (e) { saved = null; }
-    if (saved && saved.t > 15) resumeTo = saved.t;
-
-    $('osdTitle').textContent = item.name;
+    $('osdName').textContent = item.name;
+    $('osdGroup').textContent = state.share.name + ' · /' + state.path;
+    var nx = nextFileIndex();
+    $('osdNext').textContent = nx >= 0 ? 'Danach  ' + list.items[nx].name : '';
+    $('osdFill').style.width = '0';
+    $('osdNow').textContent = '';
     $('toast').hidden = true;
     showScreen('player');
     $('buffering').hidden = false;
     showOsd(true);
 
     video.onloadedmetadata = function () {
-      if (resumeTo > 0 && resumeTo < video.duration - 30) {
+      if (resumeTo > 0 && resumeTo < video.duration - END_MARGIN) {
         try { video.currentTime = resumeTo; } catch (e) { /* ignorieren */ }
         toast('Fortgesetzt bei ' + fmtTime(resumeTo) + '  ·  Rot: von vorn');
+      } else {
+        resumeTo = 0;
       }
       updateOsd();
     };
@@ -378,20 +634,19 @@
     video.onpause = function () { updateOsd(); showOsd(true); };
     video.ontimeupdate = function () {
       updateOsd();
+      if (!reportReady && !video.seeking && video.currentTime >= Math.max(0, resumeTo - 2)) reportReady = true;
       var now = new Date().getTime();
-      if (now - saveTimer > 5000) { saveTimer = now; savePosition(); }
+      if (now - lastReport > 10000) { lastReport = now; reportPosition(); }
     };
     video.onended = function () { onEnded(); };
     video.onerror = function () { onVideoError(); };
 
-    video.src = state.base + '/stream?share=' + encodeURIComponent(state.share.id) +
-      '&path=' + encodeURIComponent(path);
+    video.src = state.base + '/stream?share=' + enc(state.share.id) + '&path=' + enc(path);
     var p = video.play();
     if (p && p['catch']) p['catch'](function () { /* Fehler meldet das error-Event */ });
   }
 
   function stopVideo() {
-    if (!video) return;
     video.onloadedmetadata = video.onplaying = video.onwaiting = video.onseeked = null;
     video.onpause = video.ontimeupdate = video.onended = video.onerror = null;
     try { video.pause(); } catch (e) { /* ignorieren */ }
@@ -399,50 +654,57 @@
     try { video.load(); } catch (e2) { /* ignorieren */ }
   }
 
+  function backToList() {
+    refreshItems();
+    showScreen('browse');
+  }
+
   function leavePlayer() {
     clearTimeout(osdTimer);
     clearTimeout(seekTimer);
     seekTarget = null;
-    savePosition();
+    reportPosition();
     stopVideo();
-    showScreen('browse');
-    renderList();
+    cur = null;
+    backToList();
   }
 
   function onEnded() {
-    store(currentKey, null);
-    // Naechste Datei im selben Ordner automatisch abspielen (z. B. Serienfolgen)
-    var next = -1;
-    for (var i = state.playingIndex + 1; i < state.items.length; i++) {
-      if (state.items[i].kind === 'file') { next = i; break; }
+    // Zu Ende gesehen: nichts mehr zum Fortsetzen
+    if (cur && state.share) {
+      setPosLocal(state.share.id, cur.path, 0, 0);
+      postJson('/api/position', { share: state.share.id, path: cur.path, clear: true });
     }
+    // Naechste Datei im selben Ordner automatisch abspielen (z. B. Serienfolgen)
+    var next = nextFileIndex();
     stopVideo();
+    cur = null;
     if (next >= 0) {
-      state.focus = next;
-      play(next);
+      list.setFocus(next);
+      play(next, false);
     } else {
-      showScreen('browse');
-      renderList();
+      backToList();
     }
   }
 
   function onVideoError() {
-    var code = video && video.error ? video.error.code : 0;
+    var code = video.error ? video.error.code : 0;
     var texts = {
       1: 'Wiedergabe abgebrochen.',
       2: 'Netzwerkfehler beim Lesen der Datei.',
       3: 'Die Datei konnte nicht dekodiert werden.',
       4: 'Dieses Format wird vom Fernseher nicht unterstützt.'
     };
-    savePosition();
+    var name = cur ? cur.name : '';
+    reportPosition();
     stopVideo();
-    var backToList = function () { showScreen('browse'); renderList(); };
-    showMessage('Wiedergabe nicht möglich', texts[code] || 'Unbekannter Fehler.', currentName,
-      backToList, backToList);
+    cur = null;
+    var back = function () { backToList(); };
+    showMessage('Wiedergabe nicht möglich', texts[code] || 'Unbekannter Fehler.', name, back, back);
   }
 
   function seekBy(delta) {
-    if (!video || !isFinite(video.duration)) return;
+    if (!isFinite(video.duration)) return;
     var base = seekTarget !== null ? seekTarget : video.currentTime;
     seekTarget = Math.max(0, Math.min(video.duration - 1, base + delta));
     showOsd(false);
@@ -456,7 +718,6 @@
   }
 
   function togglePlay() {
-    if (!video) return;
     if (video.paused) { var p = video.play(); if (p && p['catch']) p['catch'](function () {}); }
     else video.pause();
   }
@@ -474,7 +735,6 @@
       case K.FF: seekBy(30); break;
       case K.RED:
         try { video.currentTime = 0; } catch (e) { /* ignorieren */ }
-        store(currentKey, null);
         showOsd(false);
         break;
       case K.STOP: case K.BACK: case K.BACKSPACE: case K.ESC:
@@ -495,23 +755,26 @@
       handled = playerKey(code);
     } else if (state.screen === 'browse') {
       switch (code) {
-        case K.UP: setFocus(state.focus - 1); break;
-        case K.DOWN: setFocus(state.focus + 1); break;
-        case K.CH_UP: setFocus(state.focus - 8); break;
-        case K.CH_DOWN: setFocus(state.focus + 8); break;
+        case K.UP: list.move(-1); break;
+        case K.DOWN: list.move(1); break;
+        case K.CH_UP: case K.LEFT: list.move(-ROWS + 1); break;
+        case K.CH_DOWN: case K.RIGHT: list.move(ROWS - 1); break;
         case K.ENTER: activate(); break;
+        case K.RED:
+          var it = list.current();
+          if (it && it.kind === 'resume') resumeLast(true);
+          else if (it && it.kind === 'file') play(list.focus, true);
+          break;
         case K.BACK: case K.BACKSPACE: case K.ESC: goBack(); break;
         case K.YELLOW:
-          if (!state.share) loadShares();
+          if (state.mode === 'home') loadShares(false);
           break;
         default: handled = false;
       }
     } else if (state.screen === 'message') {
       switch (code) {
         case K.ENTER: if (state.messageAction) state.messageAction(); break;
-        case K.BACK: case K.BACKSPACE: case K.ESC:
-          (state.messageBack || exitApp)();
-          break;
+        case K.BACK: case K.BACKSPACE: case K.ESC: (state.messageBack || exitApp)(); break;
         default: handled = false;
       }
     } else {
@@ -524,15 +787,15 @@
 
   $('list').addEventListener('wheel', function (ev) {
     if (state.screen !== 'browse') return;
-    setFocus(state.focus + (ev.deltaY > 0 ? 1 : -1));
+    list.move(ev.deltaY > 0 ? 1 : -1);
     ev.preventDefault();
   });
 
   document.addEventListener('keydown', onKey, true);
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden && state.screen === 'player' && video && !video.paused) {
+    if (document.hidden && state.screen === 'player' && !video.paused) {
       video.pause();
-      savePosition();
+      reportPosition();
     }
   });
 

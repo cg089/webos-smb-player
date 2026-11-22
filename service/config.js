@@ -43,7 +43,7 @@ function pickDataDir() {
 var dataDir = pickDataDir();
 var file = path.join(dataDir, 'config.json');
 
-var data = { version: 1, port: DEFAULT_PORT, admin: null, shares: [] };
+var data = { version: 1, port: DEFAULT_PORT, admin: null, autoResume: false, shares: [] };
 
 function load() {
   try {
@@ -51,6 +51,7 @@ function load() {
     if (parsed && typeof parsed === 'object') {
       data.port = parsed.port || DEFAULT_PORT;
       data.admin = parsed.admin || null;
+      data.autoResume = parsed.autoResume === true;
       data.shares = Array.isArray(parsed.shares) ? parsed.shares : [];
     }
   } catch (e) {
@@ -175,5 +176,6 @@ module.exports = {
   setAdminPassword: setAdminPassword,
   checkAdminPassword: checkAdminPassword,
   hasAdminPassword: function () { return !!data.admin; },
+  setAutoResume: function (on) { data.autoResume = !!on; save(); },
   normalizeShare: normalizeShare
 };

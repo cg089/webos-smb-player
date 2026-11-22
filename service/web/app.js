@@ -38,6 +38,7 @@ function loadInfo() {
     row('Version', i.version + ' (Node ' + i.node + ', ' + i.platform + ')');
     row('Konfiguration', i.configFile);
     row('Zugriffsschutz', i.hasAdminPassword ? 'aktiv' : 'aus');
+    $('s_autoResume').checked = !!i.autoResume;
   }).catch(function () {
     $('info').textContent = 'Status nicht verfügbar.';
   });
@@ -145,6 +146,18 @@ $('form').onsubmit = function (ev) {
     loadShares();
   }).catch(function (e) {
     show($('result'), 'err', 'Anfrage fehlgeschlagen: ' + e.message);
+  });
+};
+
+// ---------------------------------------------------------------- Wiedergabe
+$('s_autoResume').onchange = function () {
+  var box = this;
+  api('POST', '/api/settings', { autoResume: box.checked }).then(function (r) {
+    if (!r.ok) { box.checked = !box.checked; return show($('settingsResult'), 'err', r.error || 'Speichern fehlgeschlagen'); }
+    show($('settingsResult'), 'ok', box.checked ? 'Gespeichert: Die App setzt beim Start automatisch fort.' : 'Gespeichert: Die App startet mit der Freigabenliste.');
+  }).catch(function (e) {
+    box.checked = !box.checked;
+    show($('settingsResult'), 'err', 'Anfrage fehlgeschlagen: ' + e.message);
   });
 };
 
